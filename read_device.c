@@ -6,7 +6,7 @@
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 #define  DEVICE_NAME "fiforead"
-#define  CLASS_NAME  "fifo_r"
+#define  CLASS_NAME  "fifo_read"
 #define BUFFER_SIZE 1024
 
 MODULE_LICENSE("GPL");
@@ -106,7 +106,7 @@ void cleanup_module(void)
 static int dev_open(struct inode * inodep, struct file * filep)
 {
   if (!mutex_trylock(&fifo_mutex)) {
-    printk(KERN_ALERT "FIFO read device is used by another process");
+    printk(KERN_ALERT "FIFO device is used by another process");
     return -EBUSY;
   }
 	printk(KERN_INFO "FIFO read device opened.\n");
