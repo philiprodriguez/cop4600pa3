@@ -1,3 +1,11 @@
+/*
+Philip Rodriguez
+Steven Chen
+Ryan Beck
+
+Programming Assignment 3
+*/
+
 #include <linux/mutex.h>
 #include <linux/module.h>
 #include <linux/device.h>
@@ -5,28 +13,19 @@
 #include <linux/fs.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
-#define  DEVICE_NAME "fiforead"
-#define  CLASS_NAME  "fifo_read"
+#define DEVICE_NAME "fiforeaddev"
+#define CLASS_NAME "fiforead"
 #define BUFFER_SIZE 1024
+
+static int majorNumber;
+struct class * deviceClass;
+struct device * deviceDevice;
 
 MODULE_LICENSE("GPL");
 
-static int    majorNumber;
-extern char   message[BUFFER_SIZE];
-
-char queue[BUFFER_SIZE];
-short queueFirstByte;
-short queueSize;
-
-
-static int majorNumber;
-struct class * fifoDeviceClass;
-struct device * fifoDeviceDevice;
-
-static int     dev_open(struct inode *, struct file *);
-static int     dev_release(struct inode *, struct file *);
+static int dev_open(struct inode *, struct file *);
+static int dev_release(struct inode *, struct file *);
 static ssize_t dev_read(struct file *, char *, size_t, loff_t *);
-static DEFINE_MUTEX(fifo_mutex);
 
 static struct file_operations fops =
 {
@@ -35,69 +34,67 @@ static struct file_operations fops =
    .release = dev_release,
 };
 
+extern struct mutex queueMutex;
+extern char queue[BUFFER_SIZE];
+extern short queueFirstByte;
+extern short queueSize;
 
 int init_module(void)
 {
-   printk(KERN_INFO "Initializing the FIFO read device...\n");
-    mutex_init(&fifo_mutex);
-    printk(KERN_INFO "Initializing the FIFO read device...\n");
+	printk(KERN_INFO "Initializing the FIFO read device...\n");
 
-  	// Assign a major number
-  	majorNumber = register_chrdev(0, DEVICE_NAME, &fops);
+	// Assign a major number
+	majorNumber = register_chrdev(0, DEVICE_NAME, &fops);
 
-  	// Did we succeed?
-  	if (majorNumber < 0)
-  	{
-  		// We failed.
-  		printk(KERN_ALERT "Failed to assign FIFO read device a major number!\n");
-  		return majorNumber;
-  	}
-  	// We succeeded!
-  	printk("Registered FIFO read device with major number %d.\n", majorNumber);
+	// Did we succeed?
+	if (majorNumber < 0)
+	{
+		// We failed.
+		printk(KERN_ALERT "Failed to assign FIFO read device a major number!\n");
+		return majorNumber;
+	}
+	// We succeeded!
+	printk("Registered FIFO read device with major number %d.\n", majorNumber);
 
-  	// Register device class
-  	fifoDeviceClass = class_create(THIS_MODULE, CLASS_NAME);
+	// Register device class
+	deviceClass = class_create(THIS_MODULE, CLASS_NAME);
 
-  	// Did we succeed?
-  	if (IS_ERR(fifoDeviceClass))
-  	{
-  		// Nope.
-  		unregister_chrdev(majorNumber, DEVICE_NAME);
-  		printk(KERN_ALERT "Failed to create FIFO read device class!\n");
-  		return PTR_ERR(fifoDeviceClass);
-  	}
-  	// We succeeded!
-  	printk(KERN_INFO "Created FIFO read device class.\n");
+	// Did we succeed?
+	if (IS_ERR(deviceClass))
+	{
+		// Nope.
+		unregister_chrdev(majorNumber, DEVICE_NAME);
+		printk(KERN_ALERT "Failed to create FIFO read device class!\n");
+		return PTR_ERR(deviceClass);
+	}
+	// We succeeded!
+	printk(KERN_INFO "Created FIFO read device class.\n");
 
-  	// Register the device driver
-  	fifoReadDevice = device_create(fifoDeviceClass, NULL, MKDEV(majorNumber, 0), NULL, DEVICE_NAME);
+	// Register the device driver
+	deviceDevice = device_create(deviceClass, NULL, MKDEV(majorNumber, 0), NULL, DEVICE_NAME);
 
-  	// Did we succeed?
-  	if (IS_ERR(fifoReadDevice))
-  	{
-  		// Nope.
-  		class_destroy(fifoDeviceClass);
-  		unregister_chrdev(majorNumber, DEVICE_NAME);
-  		printk(KERN_ALERT "Failed to create the FIFO read device!\n");
-  		return PTR_ERR(fifoReadDevice);
-  	}
-  	// We succeeded!
-  	printk(KERN_INFO "Successfully created FIFO read device!\n");
+	// Did we succeed?
+	if (IS_ERR(deviceDevice))
+	{
+		// Nope.
+		class_destroy(deviceClass);
+		unregister_chrdev(majorNumber, DEVICE_NAME);
+		printk(KERN_ALERT "Failed to create the FIFO read device!\n");
+		return PTR_ERR(deviceDevice);
+	}
+	// We succeeded!
+	printk(KERN_INFO "Successfully created FIFO read device!\n");
 
-  	// Initialize queueSize
-  	queueSize = 0;
-
-  	return 0;
+	return 0;
 }
 
 void cleanup_module(void)
 {
-  mutex_destroy(&fifo_mutex);
 	printk(KERN_INFO "Cleaning up FIFO read device!\n");
 
-	device_destroy(fifoDeviceClass, MKDEV(majorNumber, 0));
-	class_unregister(fifoDeviceClass);
-	class_destroy(fifoDeviceClass);
+	device_destroy(deviceClass, MKDEV(majorNumber, 0));
+	class_unregister(deviceClass);
+	class_destroy(deviceClass);
 	unregister_chrdev(majorNumber, DEVICE_NAME);
 
 	printk(KERN_INFO "FIFO device cleaned up!\n");
@@ -105,54 +102,60 @@ void cleanup_module(void)
 
 static int dev_open(struct inode * inodep, struct file * filep)
 {
-  if (!mutex_trylock(&fifo_mutex)) {
-    printk(KERN_ALERT "FIFO device is used by another process");
-    return -EBUSY;
-  }
 	printk(KERN_INFO "FIFO read device opened.\n");
 	return 0;
 }
 
 static int dev_release(struct inode * inodep, struct file * filep)
 {
-  mutex_unlock(&fifo_mutex);
 	printk(KERN_INFO "FIFO read device closed.\n");
 	return 0;
 }
 
-static ssize_t dev_read(struct file *filep, char *buffer, size_t len, loff_t *offset){
-  char * returning;
- 	int bytesRead;
- 	int error_count;
+static ssize_t dev_read(struct file * filep, char * buffer, size_t len, loff_t * offset)
+{
+	char * returning;
+	int bytesRead;
+	int error_count;
 
- 	// You want to read more than is in the queue? You don't!
- 	if (len > queueSize)
- 	{
- 		len = queueSize;
- 	}
+	// So first thing's first, we need to "own" the queue!
+	mutex_lock(&queueMutex);
 
+	// You want to read more than is in the queue? You don't!
+	if (len > queueSize)
+	{
+		len = queueSize;
+	}
 
- 	returning = kmalloc(len, GFP_KERNEL);
+	
+	returning = kmalloc(len, GFP_KERNEL);
+	
+	
+	for (bytesRead = 0; bytesRead < len; bytesRead++)
+	{
+		returning[bytesRead] = queue[queueFirstByte];
+		queueFirstByte = (queueFirstByte + 1) % BUFFER_SIZE;
+		queueSize--;
+	}
 
+	error_count = copy_to_user(buffer, returning, len);
+	
+	// We are done with returning once it is copied into buffer, so free it!
+	kfree(returning);
 
- 	for (bytesRead = 0; bytesRead < len; bytesRead++)
- 	{
- 		returning[bytesRead] = queue[queueFirstByte];
- 		queueFirstByte = (queueFirstByte + 1) % BUFFER_SIZE;
- 		queueSize--;
- 	}
+	// Now that we are done with all the queue stuff, we can unlock it.
+	mutex_unlock(&queueMutex);
 
- 	error_count = copy_to_user(buffer, returning, len);
- 	if (error_count == 0)
- 	{
- 		printk(KERN_INFO "%zu bytes read from FIFO device.\n", len);
- 		return len;
- 	}
- 	else
- 	{
- 		printk(KERN_INFO "Bytes couldn't be read from FIFO device!\n");
- 		return -EFAULT;
- 	}
-
- 	kfree(returning);
+	if (error_count == 0)
+	{
+		printk(KERN_INFO "%zu bytes read from FIFO read device.\n", len);
+	
+		// Return the number of bytes removed or read from our queue.
+		return len;
+	}
+	else
+	{
+		printk(KERN_INFO "Bytes couldn't be read from FIFO read device!\n");
+		return -EFAULT;
+	}
 }
